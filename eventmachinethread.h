@@ -4,6 +4,8 @@
 #include <QThread>
 #include <QTimer>
 #include <QVector>
+#include <QTcpServer>
+#include <QTcpSocket>
 
 #include "connector.h"
 
@@ -23,10 +25,16 @@ private:
     QTimer* m_timeToReadData;
     QVector<Connector*> m_connections;
 
+    QVector<QTcpSocket*> m_sockets;
+    QTcpServer* m_server;
+
 signals:
+    void finish();
 
 public slots:
     void readEvents();
+    void clientConnect();
+    void clientDisconnect();
 };
 
 #endif // EVENTMACHINETHREAD_H

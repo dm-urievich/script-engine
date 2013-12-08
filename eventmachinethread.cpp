@@ -2,24 +2,26 @@
 
 #include <QDomElement>
 #include <QDomDocument>
-#include <QVector>
 #include <QTextStream>
 #include <QFile>
 #include <QDebug>
-#include <QFileInfo>
 #include <QDateTime>
 
+const int PORT = 2525;
+
 const QString CONNECTIONS_CONF_FILE = "../connections-conf.xml";
-const QString MODULE_EVENTS_FILE = "../../moduleEvents.xml";
-const QString MODULE_SOCKETS_FILE = "../../moduleSockets.xml";
 
 EventMachineThread::EventMachineThread(QObject *parent) :
     QThread(parent)
 {
-    m_timeToReadData = new QTimer(this);
-    m_timeToReadData->setInterval(1000);
+    m_timeToReadData = new QTimer;
+    m_server = new QTcpServer(this);
 
-    connect(m_timeToReadData, SIGNAL(timeout()), this, SLOT(readEvents()));
+    if (!m_server->listen(QHostAddress::Any, PORT)) {
+        qDebug() << "Fail open port " << PORT;
+    }
+
+    connect(m_server, SIGNAL(newConnection()), this, SLOT(clientConnect()));
 }
 
 void EventMachineThread::run()
@@ -28,59 +30,65 @@ void EventMachineThread::run()
     // start timer for read file and make actions with events
     createConections(CONNECTIONS_CONF_FILE);
 
-
-//    m_timeToReadData->start();
-
-    for(;;) {
-        readEvents();       // it's not right
-        QThread::msleep(1000);
-    }
     exec();
+}
+
+void EventMachineThread::clientConnect()
+{
+    qDebug() << "New connection!";
+
+    QTcpSocket* client = m_server->nextPendingConnection();
+
+    connect(client, SIGNAL(disconnected()), this, SLOT(clientDisconnect()));
+    connect(client, SIGNAL(readyRead()), this, SLOT(readEvents()));
+
+    m_sockets.push_back(client);
+}
+
+void EventMachineThread::clientDisconnect()
+{
+    qDebug() << "client disconnect";
+
+    QTcpSocket* client = (QTcpSocket*) sender();
+
+    for (int i = 0; i < m_sockets.size(); i++) {
+        if (client == m_sockets[i]) {
+            m_sockets.remove(i);
+        }
+    }
+
+    client->deleteLater();
 }
 
 void EventMachineThread::readEvents()
 {
+    QTcpSocket* client = (QTcpSocket*) sender();
+
+    qDebug() << "input xml file";
+
     QDomDocument doc("module");
-    QFile inFile(MODULE_EVENTS_FILE);
-    QString errorParse;
-    QVector<Connector*>::iterator connect = m_connections.begin();
+
+    QTextStream inSocket(client);
+    QString xmlData;
+
+    xmlData = inSocket.readAll();
+
     int errorLine;
-    int idModule = 0;
-
-    static QDateTime lastModif;
-    QDateTime curModif;
-    QFileInfo fileDate(MODULE_EVENTS_FILE);
-    curModif = fileDate.lastModified();
-    if (curModif <= lastModif) {
-        return;
-    }
-    lastModif = curModif;
-
-    if (!inFile.open(QIODevice::ReadOnly)) {
-        qDebug() << "Error: read file";
-        return;
-    }
-    if (!doc.setContent(&inFile, &errorParse, &errorLine)) {
+    QString errorParse;
+    if (!doc.setContent(xmlData, &errorParse, &errorLine)) {
         qDebug() << "Error: " << errorParse;
         qDebug() << "in line: " << errorLine << endl;
-        inFile.close();
         return;
     }
-    inFile.close();
 
-//    qDebug() << "Read file " << MODULE_EVENTS_FILE;
-
-    // печатает имена всех непосредственных потомков
-    // внешнего элемента.
     QDomElement docElem = doc.documentElement();
 
+    QVector<Connector*>::iterator connect = m_connections.begin();
     QDomNode n = docElem.firstChild();
     while(!n.isNull()) {
         QDomElement e = n.toElement(); // пробуем преобразовать узел в элемент.
         if(!e.isNull()) {
-            //qDebug() << e.tagName() << '\n'; // узел действительно является элементом.
-            //qDebug() << "attr: " << e.attribute("id") << '\n';
-            idModule = e.attribute("id").toInt();
+            int idModule = e.attribute("id").toInt();
             if (idModule) {
                  // удобнее это вынести в функцию
                 for (connect = m_connections.begin(); connect != m_connections.end(); ++connect) {
@@ -204,21 +212,25 @@ void EventMachineThread::generateSockets()
 {
     QVector<Connector*>::Iterator connect;
 
-    QFile outFile(MODULE_SOCKETS_FILE);
-    if (outFile.open(QIODevice::WriteOnly)) {
-        QTextStream out(&outFile);
-        out.setCodec("UTF-8");
-        out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-        out << "<module>\n";
+    QString xmlData;
 
-        for (connect = m_connections.begin(); connect != m_connections.end(); ++connect) {
-            if ((*connect)->isEvent()) {
-                (*connect)->generateXml(out);
-                qDebug() << "Event in " << (*connect)->nameSender << " to " << (*connect)->nameReceiver;
-            }
+    QTextStream out(&xmlData);
+
+    out.setCodec("UTF-8");
+    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    out << "<module>\n";
+
+    for (connect = m_connections.begin(); connect != m_connections.end(); ++connect) {
+        if ((*connect)->isEvent()) {
+            (*connect)->generateXml(out);
+            qDebug() << "Event in " << (*connect)->nameSender << " to " << (*connect)->nameReceiver;
         }
+    }
 
-        out << "</module>\n";
-        outFile.close();
+    out << "</module>\n";
+
+    // send to all clients
+    for (int i = 0; i < m_sockets.size(); i++) {
+        m_sockets[i]->write(xmlData.toUtf8());
     }
 }
