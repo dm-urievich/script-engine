@@ -220,17 +220,23 @@ void EventMachineThread::generateSockets()
     out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     out << "<module>\n";
 
+    bool enyEvent = false;
     for (connect = m_connections.begin(); connect != m_connections.end(); ++connect) {
         if ((*connect)->isEvent()) {
             (*connect)->generateXml(out);
+
+            enyEvent = true;
             qDebug() << "Event in " << (*connect)->nameSender << " to " << (*connect)->nameReceiver;
         }
     }
 
     out << "</module>\n";
 
-    // send to all clients
-    for (int i = 0; i < m_sockets.size(); i++) {
-        m_sockets[i]->write(xmlData.toUtf8());
+    if (enyEvent)
+    {
+        // send to all clients
+        for (int i = 0; i < m_sockets.size(); i++) {
+            m_sockets[i]->write(xmlData.toUtf8());
+        }
     }
 }
